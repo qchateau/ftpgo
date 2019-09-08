@@ -277,8 +277,10 @@ func (s *session) handleFtpCommand(line string) string {
 		return s.handleStore(arguments, false)
 	case "NOOP":
 		return code200
-	default:
+	case "ACCT", "ALLO", "SITE":
 		return code202
+	default:
+		return code502
 	}
 }
 

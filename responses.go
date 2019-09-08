@@ -19,6 +19,7 @@ const (
 	code426        = "426 Connection closed; transfer aborted."
 	code450        = "450 Requested file action not taken."
 	code500        = "500 Syntax error, command unrecognized."
+	code502        = "502 Command not implemented."
 	code501        = "501 Syntax error in parameters or arguments."
 	code504        = "504 Command not implemented for that parameter."
 	code530        = "530 Not logged in."
