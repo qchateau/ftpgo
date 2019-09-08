@@ -8,20 +8,26 @@ import (
 	"io/ioutil"
 	"net"
 	"os"
-	"path"
+	"path/filepath"
 	"strings"
 )
 
-const defaultWOrkDir = "/" // TODO: windows ?
-
 // RunSession creates and runs a FTP session from a net.Conn
-func RunSession(conn net.Conn) {
+func RunSession(config Config, conn net.Conn) {
 	fmt.Printf("new session from %v\n", conn.RemoteAddr().String())
 	defer conn.Close()
 
+	wd, err := os.Getwd()
+	if err != nil {
+		fmt.Printf("could not get current working directory: %v\n", err.Error())
+		return
+	}
+
 	s := session{
 		piConn:  conn,
-		workDir: defaultWOrkDir,
+		rootDir: wd,
+		workDir: "/",
+		config:  config,
 	}
 
 	s.run()
@@ -31,11 +37,12 @@ type session struct {
 	piConn      net.Conn
 	dtpListener net.Listener
 	userDtpAddr net.TCPAddr
-	user        string
+	config      Config
 	loggedIn    bool
 	quitting    bool
 	passive     bool
 	dataType    string
+	rootDir     string
 	workDir     string
 	renameFrom  string
 }
@@ -67,7 +74,6 @@ func (s *session) run() {
 		s.writeResponse(response)
 
 		if s.quitting {
-			// no data connection yet, just close
 			break
 		}
 	}
@@ -94,7 +100,11 @@ func (s *session) createListener(resetIfExists bool) (err error) {
 		return nil
 	}
 
-	s.dtpListener, err = net.Listen("tcp4", bindAddr+":")
+	if s.dtpListener != nil {
+		s.dtpListener.Close()
+	}
+
+	s.dtpListener, err = net.Listen("tcp4", s.config.Addr+":")
 	if err == nil {
 		fmt.Printf("new DTP listener: %s\n", s.dtpListener.Addr().String())
 	}
@@ -135,18 +145,34 @@ func (s *session) simpleWriteDtp(data []byte) string {
 	return code226
 }
 
-func (s *session) realpath(pathname string) string {
-	if path.IsAbs(pathname) {
-		return pathname
+func (s *session) realpath(path string) (string, error) {
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(s.workDir, path)
+	} else {
+		// always clean the input path to remove .. shenanigans
+		path = filepath.Clean(path)
 	}
 
-	return path.Join(s.workDir, pathname)
+	path = filepath.Join(s.rootDir, path)
+	realpath, err := filepath.EvalSymlinks(path)
+	if err == nil {
+		path = realpath
+	}
+
+	if !filepath.HasPrefix(path, s.rootDir) {
+		// trying to get out of jail
+		return "", errors.New("path not allowed")
+	}
+	return path, nil
 }
 
 func (s *session) getFileList(path string) (files []os.FileInfo, err error) {
-	path = s.realpath(path)
+	path, err = s.realpath(path)
+	if err != nil {
+		fmt.Printf("failed: %v\n", err.Error())
+		return
+	}
 
-	// TODO: verify how we should handle symlinks
 	fileInfo, err := os.Stat(path)
 	if err != nil {
 		fmt.Printf("stat(%v) failed: %v\n", path, err.Error())
@@ -169,8 +195,14 @@ func (s *session) getFileList(path string) (files []os.FileInfo, err error) {
 func (s *session) deletePath(
 	path string,
 	allowDir bool,
-	allowFile bool) (err error) {
-	path = s.realpath(path)
+	allowFile bool) error {
+	path, err := s.realpath(path)
+	if err != nil {
+		fmt.Printf("failed: %v\n", err.Error())
+		return err
+
+	}
+
 	info, err := os.Stat(path)
 	if err != nil {
 		fmt.Printf("Stat(%v) failed: %v\n", path, err.Error())
@@ -201,6 +233,8 @@ func (s *session) handleFtpCommand(line string) string {
 	switch command {
 	case "USER":
 		return s.handleUser(arguments)
+	case "PASS":
+		return s.handlePassword(arguments)
 	case "QUIT":
 		return s.handleQuit()
 	case "REIN":
@@ -249,8 +283,30 @@ func (s *session) handleFtpCommand(line string) string {
 }
 
 func (s *session) handleUser(user string) string {
-	fmt.Printf("login as '%v'\n", user)
-	s.user = user
+	fmt.Printf("user '%v'\n", user)
+	s.loggedIn = false
+
+	if !s.config.AllowAnyUser() && user != s.config.Login {
+		return code530
+	}
+
+	if s.config.PasswordRequired() {
+		return code331
+	}
+
+	s.loggedIn = true
+	return code230
+}
+
+func (s *session) handlePassword(pass string) string {
+	s.loggedIn = false
+
+	ok := s.config.VerifyPassword(pass)
+	if !ok {
+		fmt.Printf("bad password\n")
+		return code530
+	}
+
 	s.loggedIn = true
 	return code230
 }
@@ -258,14 +314,12 @@ func (s *session) handleUser(user string) string {
 func (s *session) handleQuit() string {
 	s.quitting = true
 	s.loggedIn = false
-	s.user = ""
 	return code221
 }
 
 func (s *session) handleReinit() string {
 	s.loggedIn = false
-	s.user = ""
-	s.workDir = defaultWOrkDir
+	s.workDir = "/"
 	return code220
 }
 
@@ -379,20 +433,36 @@ func (s *session) handlePwd() string {
 	return fmt.Sprintf(code257, s.workDir)
 }
 
-func (s *session) handleCwd(path string) string {
+func (s *session) handleCwd(pathname string) string {
 	if !s.loggedIn {
 		return code530
 	}
 
-	path = s.realpath(path)
-
-	info, err := os.Stat(path)
-	if err != nil || !info.IsDir() {
-		fmt.Printf("path %v is not a directory\n", path)
-		return code450
+	if !filepath.IsAbs(pathname) {
+		pathname = filepath.Join(s.workDir, pathname)
+	} else {
+		// Always clean to avoid .. injection
+		pathname = filepath.Clean(pathname)
 	}
 
-	s.workDir = path
+	// Check that the real path exists, but store the relative path
+	realpath, err := s.realpath(pathname)
+	if err != nil {
+		fmt.Printf("failed: %v\n", err.Error())
+		return code550
+	}
+
+	info, err := os.Stat(realpath)
+	if err != nil || !info.IsDir() {
+		fmt.Printf("path %v is not a directory\n", pathname)
+		return code550
+	}
+
+	if pathname == s.workDir {
+		return code550
+	}
+
+	s.workDir = pathname
 	return code250
 }
 
@@ -401,7 +471,11 @@ func (s *session) handleCdup() string {
 		return code530
 	}
 
-	s.workDir = path.Dir(s.workDir)
+	newWorkDir := filepath.Join(s.workDir, "..")
+	if newWorkDir == s.workDir {
+		return code550
+	}
+	s.workDir = newWorkDir
 	return code200
 }
 
@@ -459,7 +533,11 @@ func (s *session) handleRetrieve(path string) string {
 		return code530
 	}
 
-	path = s.realpath(path)
+	path, err := s.realpath(path)
+	if err != nil {
+		fmt.Printf("failed: %v\n", err.Error())
+		return code450
+	}
 
 	file, err := os.Open(path)
 	if err != nil {
@@ -501,7 +579,12 @@ func (s *session) handleStore(path string, truncate bool) string {
 		return code530
 	}
 
-	path = s.realpath(path)
+	path, err := s.realpath(path)
+	if err != nil {
+		fmt.Printf("failed: %v\n", err.Error())
+		return code553
+	}
+
 	flags := os.O_RDWR | os.O_CREATE
 	if truncate {
 		flags |= os.O_TRUNC
@@ -551,8 +634,13 @@ func (s *session) handleMkd(path string) string {
 		return code530
 	}
 
-	path = s.realpath(path)
-	err := os.Mkdir(path, os.ModePerm)
+	path, err := s.realpath(path)
+	if err != nil {
+		fmt.Printf("failed: %v\n", err.Error())
+		return code550
+	}
+
+	err = os.Mkdir(path, os.ModePerm)
 	if err != nil {
 		fmt.Printf("Mkdir(%v) failed: %v\n", path, err.Error())
 		return code550
@@ -589,8 +677,13 @@ func (s *session) handleRenameFrom(path string) string {
 		return code530
 	}
 
-	path = s.realpath(path)
-	_, err := os.Stat(path)
+	path, err := s.realpath(path)
+	if err != nil {
+		fmt.Printf("failed: %v\n", err.Error())
+		return code550
+	}
+
+	_, err = os.Stat(path)
 	if err != nil {
 		fmt.Printf("Stat(%v) failed: %v\n", path, err.Error())
 		return code550
@@ -605,8 +698,13 @@ func (s *session) handleRenameTo(path string) string {
 		return code530
 	}
 
-	path = s.realpath(path)
-	err := os.Rename(s.renameFrom, path)
+	path, err := s.realpath(path)
+	if err != nil {
+		fmt.Printf("failed: %v\n", err.Error())
+		return code553
+	}
+
+	err = os.Rename(s.renameFrom, path)
 	if err != nil {
 		fmt.Printf("Rename(%v, %v) failed: %v\n",
 			s.renameFrom, path, err.Error())

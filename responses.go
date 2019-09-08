@@ -12,6 +12,7 @@ const (
 	code250        = "250 Requested file action okay, completed."
 	code257created = "257 \"%v\" created."
 	code257        = "257 \"%v\""
+	code331        = "331 User name okay, need password."
 	code350        = "350 Requested file action pending further information."
 	code421        = "421 Service not available, closing control connection."
 	code425        = "425 Can't open data connection."

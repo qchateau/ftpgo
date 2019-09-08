@@ -1,5 +1,4 @@
-- verify symlinks
-- windows
 - more error handling (see TODO)
 - implement user/group
-- login
+- TLS
+- logs
