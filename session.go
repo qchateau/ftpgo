@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -11,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 )
+
+const noResponse = ""
 
 // RunSession creates and runs a FTP session from a net.Conn
 func RunSession(config Config, conn net.Conn) {
@@ -66,7 +69,9 @@ func (s *Session) run() {
 		fmt.Printf("-> %v\n", line)
 		response := s.handleFtpCommand(line)
 
-		s.writeResponse(response)
+		if response != noResponse {
+			s.writeResponse(response)
+		}
 
 		if s.quitting {
 			break
@@ -264,6 +269,8 @@ func (s *Session) handleFtpCommand(line string) string {
 		return s.handleStore(arguments, true)
 	case "APPE":
 		return s.handleStore(arguments, false)
+	case "AUTH":
+		return s.handleAuth(arguments)
 	case "NOOP":
 		return code200
 	case "ACCT", "ALLO", "SITE":
@@ -689,4 +696,36 @@ func (s *Session) handleRenameTo(path string) string {
 		return code553
 	}
 	return code250
+}
+
+func (s *session) handleAuth(arguments string) string {
+	if arguments != "TLS" {
+		return code504
+	}
+
+	cert, err := tls.LoadX509KeyPair("./cert.crt", "./key.key")
+	if err != nil {
+		fmt.Printf("cannot load X509 certs: %v\n", err.Error())
+		// let's just say we can't do TLS
+		return code504
+	}
+
+	s.writeResponse(code234)
+
+	config := tls.Config{
+		Certificates: []tls.Certificate{cert},
+	}
+
+	tlsConn := tls.Server(s.piConn, &config)
+	err = tlsConn.Handshake()
+	if err != nil {
+		fmt.Printf("error during TLS handshake: %v\n", err.Error())
+		s.quitting = true
+		return code421
+	}
+
+	fmt.Printf("TLS handshake successful\n")
+	s.piConn = tlsConn
+
+	return noResponse
 }

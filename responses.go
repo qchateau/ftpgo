@@ -9,6 +9,7 @@ const (
 	code226        = "226 Closing data connection."
 	code227        = "227 Entering Passive Mode (%v,%v,%v,%v,%v,%v)."
 	code230        = "230 User logged in, proceed."
+	code234        = "234 Starting TLS negociation."
 	code250        = "250 Requested file action okay, completed."
 	code257created = "257 \"%v\" created."
 	code257        = "257 \"%v\""
