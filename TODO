@@ -2,3 +2,5 @@
 - implement user/group
 - TLS
 - logs
+- LIST format: firefox does not like it
+- extended features

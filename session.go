@@ -460,10 +460,6 @@ func (s *session) handleCwd(pathname string) string {
 		return code550
 	}
 
-	if pathname == s.workDir {
-		return code550
-	}
-
 	s.workDir = pathname
 	return code250
 }
