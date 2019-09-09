@@ -17,7 +17,7 @@ func RunSession(config Config, conn net.Conn) {
 	fmt.Printf("new session from %v\n", conn.RemoteAddr().String())
 	defer conn.Close()
 
-	s := session{
+	s := Session{
 		piConn:  conn,
 		jailDir: config.Jail,
 		workDir: config.Jail,
@@ -27,7 +27,8 @@ func RunSession(config Config, conn net.Conn) {
 	s.run()
 }
 
-type session struct {
+// Session stores all information relative to a FTP session
+type Session struct {
 	piConn      net.Conn
 	dtpListener net.Listener
 	userDtpAddr net.TCPAddr
@@ -41,7 +42,7 @@ type session struct {
 	renameFrom  string
 }
 
-func (s *session) run() {
+func (s *Session) run() {
 	const lineMaxSize = 4096
 	piConnReader := bufio.NewReaderSize(s.piConn, lineMaxSize)
 
@@ -79,7 +80,7 @@ func (s *session) run() {
 }
 
 // TODO: handle error where writeResponse is called
-func (s *session) writeResponse(response string) (err error) {
+func (s *Session) writeResponse(response string) (err error) {
 	fmt.Printf("<- %v\n", response)
 	data := []byte(response + "\r\n")
 	n, err := s.piConn.Write(data)
@@ -89,7 +90,7 @@ func (s *session) writeResponse(response string) (err error) {
 	return
 }
 
-func (s *session) createListener(resetIfExists bool) (err error) {
+func (s *Session) createListener(resetIfExists bool) (err error) {
 	if !resetIfExists && s.dtpListener != nil {
 		return nil
 	}
@@ -105,7 +106,7 @@ func (s *session) createListener(resetIfExists bool) (err error) {
 	return
 }
 
-func (s *session) dialDtp() (net.Conn, error) {
+func (s *Session) dialDtp() (net.Conn, error) {
 	if s.passive {
 		if s.dtpListener == nil {
 			fmt.Printf("tried to write data but no active DT listener")
@@ -118,7 +119,7 @@ func (s *session) dialDtp() (net.Conn, error) {
 	return net.DialTCP("tcp4", nil, &s.userDtpAddr)
 }
 
-func (s *session) simpleWriteDtp(data []byte) string {
+func (s *Session) simpleWriteDtp(data []byte) string {
 	conn, err := s.dialDtp()
 	if err != nil {
 		fmt.Printf("cannot connect to DTP: %v\n", err.Error())
@@ -139,7 +140,7 @@ func (s *session) simpleWriteDtp(data []byte) string {
 	return code226
 }
 
-func (s *session) realpath(path string) (string, error) {
+func (s *Session) realpath(path string) (string, error) {
 	if !filepath.IsAbs(path) {
 		path = filepath.Join(s.workDir, path)
 	} else {
@@ -159,7 +160,7 @@ func (s *session) realpath(path string) (string, error) {
 	return path, nil
 }
 
-func (s *session) getFileList(path string) (files []os.FileInfo, err error) {
+func (s *Session) getFileList(path string) (files []os.FileInfo, err error) {
 	if path, err = s.realpath(path); err != nil {
 		fmt.Printf("failed: %v\n", err.Error())
 		return
@@ -184,7 +185,7 @@ func (s *session) getFileList(path string) (files []os.FileInfo, err error) {
 	return
 }
 
-func (s *session) deletePath(path string, allowDir bool, allowFile bool) error {
+func (s *Session) deletePath(path string, allowDir bool, allowFile bool) error {
 	path, err := s.realpath(path)
 	if err != nil {
 		fmt.Printf("failed: %v\n", err.Error())
@@ -210,7 +211,7 @@ func (s *session) deletePath(path string, allowDir bool, allowFile bool) error {
 	return nil
 }
 
-func (s *session) handleFtpCommand(line string) string {
+func (s *Session) handleFtpCommand(line string) string {
 	sliced := strings.SplitN(line, " ", 2)
 	command := sliced[0]
 	arguments := ""
@@ -272,7 +273,7 @@ func (s *session) handleFtpCommand(line string) string {
 	}
 }
 
-func (s *session) handleUser(user string) string {
+func (s *Session) handleUser(user string) string {
 	fmt.Printf("user '%v'\n", user)
 	s.loggedIn = false
 
@@ -288,7 +289,7 @@ func (s *session) handleUser(user string) string {
 	return code230
 }
 
-func (s *session) handlePassword(pass string) string {
+func (s *Session) handlePassword(pass string) string {
 	s.loggedIn = false
 
 	if !s.config.VerifyPassword(pass) {
@@ -300,19 +301,19 @@ func (s *session) handlePassword(pass string) string {
 	return code230
 }
 
-func (s *session) handleQuit() string {
+func (s *Session) handleQuit() string {
 	s.quitting = true
 	s.loggedIn = false
 	return code221
 }
 
-func (s *session) handleReinit() string {
+func (s *Session) handleReinit() string {
 	s.loggedIn = false
 	s.workDir = "/"
 	return code220
 }
 
-func (s *session) handleType(arguments string) string {
+func (s *Session) handleType(arguments string) string {
 	if !s.loggedIn {
 		return code530
 	}
@@ -340,7 +341,7 @@ func (s *session) handleType(arguments string) string {
 	return code200
 }
 
-func (s *session) handleMode(mode string) string {
+func (s *Session) handleMode(mode string) string {
 	if !s.loggedIn {
 		return code530
 	}
@@ -353,7 +354,7 @@ func (s *session) handleMode(mode string) string {
 	}
 }
 
-func (s *session) handleStructure(structure string) string {
+func (s *Session) handleStructure(structure string) string {
 	if !s.loggedIn {
 		return code530
 	}
@@ -366,7 +367,7 @@ func (s *session) handleStructure(structure string) string {
 	}
 }
 
-func (s *session) handlePort(addr string) string {
+func (s *Session) handlePort(addr string) string {
 	if !s.loggedIn {
 		return code530
 	}
@@ -387,7 +388,7 @@ func (s *session) handlePort(addr string) string {
 	return code200
 }
 
-func (s *session) handlePassive() string {
+func (s *Session) handlePassive() string {
 	if !s.loggedIn {
 		return code530
 	}
@@ -413,7 +414,7 @@ func (s *session) handlePassive() string {
 	return fmt.Sprintf(code227, h1, h2, h3, h4, p1, p2)
 }
 
-func (s *session) handlePwd() string {
+func (s *Session) handlePwd() string {
 	if !s.loggedIn {
 		return code530
 	}
@@ -421,7 +422,7 @@ func (s *session) handlePwd() string {
 	return fmt.Sprintf(code257, s.workDir)
 }
 
-func (s *session) handleCwd(pathname string) string {
+func (s *Session) handleCwd(pathname string) string {
 	if !s.loggedIn {
 		return code530
 	}
@@ -441,7 +442,7 @@ func (s *session) handleCwd(pathname string) string {
 	return code250
 }
 
-func (s *session) handleCdup() string {
+func (s *Session) handleCdup() string {
 	if !s.loggedIn {
 		return code530
 	}
@@ -455,7 +456,7 @@ func (s *session) handleCdup() string {
 	return code200
 }
 
-func (s *session) handleList(path string) string {
+func (s *Session) handleList(path string) string {
 	if !s.loggedIn {
 		return code530
 	}
@@ -486,7 +487,7 @@ func (s *session) handleList(path string) string {
 	return s.simpleWriteDtp([]byte(resp))
 }
 
-func (s *session) handleNlst(path string) string {
+func (s *Session) handleNlst(path string) string {
 	if !s.loggedIn {
 		return code530
 	}
@@ -505,7 +506,7 @@ func (s *session) handleNlst(path string) string {
 	return s.simpleWriteDtp([]byte(resp))
 }
 
-func (s *session) handleRetrieve(path string) string {
+func (s *Session) handleRetrieve(path string) string {
 	if !s.loggedIn {
 		return code530
 	}
@@ -551,7 +552,7 @@ func (s *session) handleRetrieve(path string) string {
 	}
 }
 
-func (s *session) handleStore(path string, truncate bool) string {
+func (s *Session) handleStore(path string, truncate bool) string {
 	if !s.loggedIn {
 		return code530
 	}
@@ -606,7 +607,7 @@ func (s *session) handleStore(path string, truncate bool) string {
 
 }
 
-func (s *session) handleMkd(path string) string {
+func (s *Session) handleMkd(path string) string {
 	if !s.loggedIn {
 		return code530
 	}
@@ -625,7 +626,7 @@ func (s *session) handleMkd(path string) string {
 	return fmt.Sprintf(code257created, path)
 }
 
-func (s *session) handleRmd(path string) string {
+func (s *Session) handleRmd(path string) string {
 	if !s.loggedIn {
 		return code530
 	}
@@ -637,7 +638,7 @@ func (s *session) handleRmd(path string) string {
 	return code250
 }
 
-func (s *session) handleDelete(path string) string {
+func (s *Session) handleDelete(path string) string {
 	if !s.loggedIn {
 		return code530
 	}
@@ -649,7 +650,7 @@ func (s *session) handleDelete(path string) string {
 	return code250
 }
 
-func (s *session) handleRenameFrom(path string) string {
+func (s *Session) handleRenameFrom(path string) string {
 	if !s.loggedIn {
 		return code530
 	}
@@ -670,7 +671,7 @@ func (s *session) handleRenameFrom(path string) string {
 	return code350
 }
 
-func (s *session) handleRenameTo(path string) string {
+func (s *Session) handleRenameTo(path string) string {
 	if !s.loggedIn {
 		return code530
 	}
