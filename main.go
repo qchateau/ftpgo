@@ -3,8 +3,8 @@ package main
 import (
 	"flag"
 	"fmt"
-	"net"
 	"os"
+	"sync"
 
 	"golang.org/x/crypto/ssh/terminal"
 )
@@ -81,19 +81,23 @@ func serve() {
 		panic("cannot open config file: " + err.Error())
 	}
 
-	ln, err := net.Listen("tcp", fmt.Sprintf("%v:%v", config.Addr, config.Port))
-	if err != nil {
-		panic("failed to open: " + err.Error())
+	var wg sync.WaitGroup
+
+	if config.PortPlain > 0 {
+		wg.Add(1)
+		go func() {
+			servePlain(config)
+			wg.Done()
+		}()
 	}
 
-	fmt.Printf("listening %s\n", ln.Addr().String())
-	defer ln.Close()
-	for {
-		conn, err := ln.Accept()
-		if err != nil {
-			fmt.Println("accept failed: " + err.Error())
-		}
-
-		go RunSession(config, conn)
+	if config.PortTLS > 0 && config.tlsConfig != nil {
+		wg.Add(1)
+		go func() {
+			serveTLS(config)
+			wg.Done()
+		}()
 	}
+
+	wg.Wait()
 }

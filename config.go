@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"io/ioutil"
@@ -22,6 +23,17 @@ func LoadConfig(path string) (Config, error) {
 	} else if err := json.Unmarshal(content, &c); err != nil {
 		return c, err
 	}
+
+	if c.TLSCert != "" && c.TLSKey != "" {
+		cert, err := tls.LoadX509KeyPair(c.TLSCert, c.TLSKey)
+		if err != nil {
+			return c, errors.New("cannot load X509 certs: " + err.Error())
+		}
+
+		c.tlsConfig = &tls.Config{
+			Certificates: []tls.Certificate{cert},
+		}
+	}
 	if !filepath.IsAbs(c.Jail) {
 		return c, errors.New("fail path must be absolute")
 	}
@@ -31,8 +43,10 @@ func LoadConfig(path string) (Config, error) {
 
 // Config contains the server configuration
 type Config struct {
-	Login, Password, Addr, Jail string
-	Port                        int
+	Login, Password, Addr, TLSCert, TLSKey, Jail string
+	PortPlain, PortTLS                           int
+
+	tlsConfig *tls.Config
 }
 
 // AllowAnyUser returns true if users can connect using any username

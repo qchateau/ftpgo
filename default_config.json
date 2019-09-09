@@ -1,7 +1,10 @@
 {
-    "port": 10021,
+    "portplain": 10021,
+    "porttls": 10990,
     "addr": "127.0.0.1",
     "login": "",
     "password": "$2a$10$IdcambWwhrXEcdwIglYPNunKp4s9pcU4M3IPX0mwdO5Vw0ftDVXxq",
-    "jail": "/"
+    "jail": "/",
+    "tlscert": "./tls.crt",
+    "tlskey": "./tls.key"
 }

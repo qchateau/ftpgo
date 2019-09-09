@@ -698,26 +698,15 @@ func (s *Session) handleRenameTo(path string) string {
 	return code250
 }
 
-func (s *session) handleAuth(arguments string) string {
-	if arguments != "TLS" {
-		return code504
-	}
-
-	cert, err := tls.LoadX509KeyPair("./cert.crt", "./key.key")
-	if err != nil {
-		fmt.Printf("cannot load X509 certs: %v\n", err.Error())
-		// let's just say we can't do TLS
+func (s *Session) handleAuth(arguments string) string {
+	if arguments != "TLS" || s.config.tlsConfig == nil {
 		return code504
 	}
 
 	s.writeResponse(code234)
 
-	config := tls.Config{
-		Certificates: []tls.Certificate{cert},
-	}
-
-	tlsConn := tls.Server(s.piConn, &config)
-	err = tlsConn.Handshake()
+	tlsConn := tls.Server(s.piConn, s.config.tlsConfig)
+	err := tlsConn.Handshake()
 	if err != nil {
 		fmt.Printf("error during TLS handshake: %v\n", err.Error())
 		s.quitting = true
