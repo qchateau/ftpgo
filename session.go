@@ -17,16 +17,10 @@ func RunSession(config Config, conn net.Conn) {
 	fmt.Printf("new session from %v\n", conn.RemoteAddr().String())
 	defer conn.Close()
 
-	wd, err := os.Getwd()
-	if err != nil {
-		fmt.Printf("could not get current working directory: %v\n", err.Error())
-		return
-	}
-
 	s := session{
 		piConn:  conn,
-		rootDir: wd,
-		workDir: "/",
+		jailDir: config.Jail,
+		workDir: config.Jail,
 		config:  config,
 	}
 
@@ -42,7 +36,7 @@ type session struct {
 	quitting    bool
 	passive     bool
 	dataType    string
-	rootDir     string
+	jailDir     string
 	workDir     string
 	renameFrom  string
 }
@@ -153,13 +147,12 @@ func (s *session) realpath(path string) (string, error) {
 		path = filepath.Clean(path)
 	}
 
-	path = filepath.Join(s.rootDir, path)
 	realpath, err := filepath.EvalSymlinks(path)
 	if err == nil {
 		path = realpath
 	}
 
-	if !filepath.HasPrefix(path, s.rootDir) {
+	if !filepath.HasPrefix(path, s.jailDir) {
 		// trying to get out of jail
 		return "", errors.New("path not allowed")
 	}
@@ -167,8 +160,7 @@ func (s *session) realpath(path string) (string, error) {
 }
 
 func (s *session) getFileList(path string) (files []os.FileInfo, err error) {
-	path, err = s.realpath(path)
-	if err != nil {
+	if path, err = s.realpath(path); err != nil {
 		fmt.Printf("failed: %v\n", err.Error())
 		return
 	}
@@ -192,15 +184,11 @@ func (s *session) getFileList(path string) (files []os.FileInfo, err error) {
 	return
 }
 
-func (s *session) deletePath(
-	path string,
-	allowDir bool,
-	allowFile bool) error {
+func (s *session) deletePath(path string, allowDir bool, allowFile bool) error {
 	path, err := s.realpath(path)
 	if err != nil {
 		fmt.Printf("failed: %v\n", err.Error())
 		return err
-
 	}
 
 	info, err := os.Stat(path)
@@ -303,8 +291,7 @@ func (s *session) handleUser(user string) string {
 func (s *session) handlePassword(pass string) string {
 	s.loggedIn = false
 
-	ok := s.config.VerifyPassword(pass)
-	if !ok {
+	if !s.config.VerifyPassword(pass) {
 		fmt.Printf("bad password\n")
 		return code530
 	}
@@ -405,8 +392,7 @@ func (s *session) handlePassive() string {
 		return code530
 	}
 
-	err := s.createListener(false)
-	if err != nil {
+	if err := s.createListener(false); err != nil {
 		fmt.Printf("failed to open data port: " + err.Error())
 		s.quitting = true
 		return code421
@@ -440,22 +426,13 @@ func (s *session) handleCwd(pathname string) string {
 		return code530
 	}
 
-	if !filepath.IsAbs(pathname) {
-		pathname = filepath.Join(s.workDir, pathname)
-	} else {
-		// Always clean to avoid .. injection
-		pathname = filepath.Clean(pathname)
-	}
-
-	// Check that the real path exists, but store the relative path
-	realpath, err := s.realpath(pathname)
+	pathname, err := s.realpath(pathname)
 	if err != nil {
 		fmt.Printf("failed: %v\n", err.Error())
 		return code550
 	}
 
-	info, err := os.Stat(realpath)
-	if err != nil || !info.IsDir() {
+	if info, err := os.Stat(pathname); err != nil || !info.IsDir() {
 		fmt.Printf("path %v is not a directory\n", pathname)
 		return code550
 	}
@@ -469,10 +446,11 @@ func (s *session) handleCdup() string {
 		return code530
 	}
 
-	newWorkDir := filepath.Join(s.workDir, "..")
-	if newWorkDir == s.workDir {
+	newWorkDir, err := s.realpath(filepath.Join(s.workDir, ".."))
+	if err != nil || newWorkDir == s.workDir {
 		return code550
 	}
+
 	s.workDir = newWorkDir
 	return code200
 }
@@ -484,6 +462,7 @@ func (s *session) handleList(path string) string {
 
 	files, err := s.getFileList(path)
 	if err != nil {
+		fmt.Printf("failed: %v\n", err.Error())
 		return code450
 	}
 
@@ -493,12 +472,12 @@ func (s *session) handleList(path string) string {
 		group := "unknown"
 
 		line := fmt.Sprintf(
-			"%v %v %v %v %v %v\r\n",
+			"%v 1 %v %v %v %v %v\r\n",
 			file.Mode().String(),
 			user,
 			group,
 			file.Size(),
-			file.ModTime().Format("2006-01-02T15:04:05"),
+			file.ModTime().Format("Jan 01 2006"),
 			file.Name())
 		resp += line
 	}
