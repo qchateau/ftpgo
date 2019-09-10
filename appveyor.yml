@@ -1,0 +1,51 @@
+version: 1.0.{build}
+image: Ubuntu1804
+
+clone_folder: /home/appveyor/go/src/github.com/qchateau/ftpgo
+environment:
+  GOPATH_OVERRIDE: /home/appveyor/go/
+  matrix:
+    - GOOS: windows
+      GOARCH: amd64
+    - GOOS: windows
+      GOARCH: "386"
+    - GOOS: darwin
+      GOARCH: amd64
+    - GOOS: darwin
+      GOARCH: "386"
+    - GOOS: linux
+      GOARCH: amd64
+    - GOOS: linux
+      GOARCH: "386"
+    - GOOS: linux
+      GOARCH: arm
+    - GOOS: linux
+      GOARCH: arm64
+
+stack: go 1.10
+
+before_build:
+  - export GOPATH=$GOPATH_OVERRIDE
+  - echo $GOPATH
+  - go version
+  - go get .
+
+build_script:
+  - if [ "$GOOS" = "windows" ]; then
+      BIN_EXT=".exe";
+    fi
+  - go build -o ftpgo_${GOOS}_${GOARCH}${BIN_EXT} .
+
+artifacts:
+  - path: ./ftpgo*
+    name: binary
+
+deploy:
+  description: 'Automatic release from AppVeyor'
+  provider: GitHub
+  auth_token:
+    secure: SvugJoP3MibRIrDfEfTVCzBraKSaTBsJi2m67USgli7KrVtSXTu8AGNaxqRgZsi3
+  draft: false
+  prerelease: false
+  on:
+    APPVEYOR_REPO_TAG: true
