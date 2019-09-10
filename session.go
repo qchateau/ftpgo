@@ -6,29 +6,38 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"log"
 	"net"
 	"os"
 	"path/filepath"
 	"strings"
 )
 
+const noResponse = ""
+
 // RunSession creates and runs a FTP session from a net.Conn
 func RunSession(config Config, conn net.Conn) {
-	fmt.Printf("new session from %v\n", conn.RemoteAddr().String())
 	defer conn.Close()
 
 	s := Session{
+		logger: log.New(
+			os.Stderr,
+			fmt.Sprintf("%-22v| ", conn.RemoteAddr().String()),
+			log.LstdFlags|log.Lshortfile,
+		),
 		piConn:  conn,
 		jailDir: config.Jail,
 		workDir: config.Jail,
 		config:  config,
 	}
 
+	s.logger.Printf("new session from %v\n", conn.RemoteAddr().String())
 	s.run()
 }
 
 // Session stores all information relative to a FTP session
 type Session struct {
+	logger      *log.Logger
 	piConn      net.Conn
 	dtpListener net.Listener
 	userDtpAddr net.TCPAddr
@@ -52,21 +61,22 @@ func (s *Session) run() {
 		buf, isPrefix, err := piConnReader.ReadLine()
 		if err != nil {
 			if err != io.EOF {
-				fmt.Println("read error: " + err.Error())
+				s.logger.Println("read error: " + err.Error())
 			}
 			return
 		}
 		if isPrefix {
-			fmt.Println("line too long")
+			s.logger.Println("line too long")
 			s.writeResponse(code500)
 			continue
 		}
 
 		line := string(buf)
-		fmt.Printf("-> %v\n", line)
 		response := s.handleFtpCommand(line)
 
-		s.writeResponse(response)
+		if response != noResponse {
+			s.writeResponse(response)
+		}
 
 		if s.quitting {
 			break
@@ -79,14 +89,23 @@ func (s *Session) run() {
 	}
 }
 
-// TODO: handle error where writeResponse is called
 func (s *Session) writeResponse(response string) (err error) {
-	fmt.Printf("<- %v\n", response)
+	if s.quitting {
+		return errors.New("quitting")
+	}
+
+	s.logger.Printf("<- %v\n", response)
 	data := []byte(response + "\r\n")
 	n, err := s.piConn.Write(data)
-	if n != len(data) {
+	if err == nil && n != len(data) {
 		err = errors.New("incomplete write")
 	}
+
+	if err != nil {
+		s.logger.Printf("%v: quitting\n", err.Error())
+		s.quitting = true
+	}
+
 	return
 }
 
@@ -101,7 +120,7 @@ func (s *Session) createListener(resetIfExists bool) (err error) {
 
 	s.dtpListener, err = net.Listen("tcp4", s.config.Addr+":")
 	if err == nil {
-		fmt.Printf("new DTP listener: %s\n", s.dtpListener.Addr().String())
+		s.logger.Printf("new DTP listener: %s\n", s.dtpListener.Addr().String())
 	}
 	return
 }
@@ -109,7 +128,7 @@ func (s *Session) createListener(resetIfExists bool) (err error) {
 func (s *Session) dialDtp() (net.Conn, error) {
 	if s.passive {
 		if s.dtpListener == nil {
-			fmt.Printf("tried to write data but no active DT listener")
+			s.logger.Printf("tried to write data but no active DT listener")
 			return nil, errors.New("can't write data: no listener")
 		}
 
@@ -122,18 +141,18 @@ func (s *Session) dialDtp() (net.Conn, error) {
 func (s *Session) simpleWriteDtp(data []byte) string {
 	conn, err := s.dialDtp()
 	if err != nil {
-		fmt.Printf("cannot connect to DTP: %v\n", err.Error())
+		s.logger.Printf("cannot connect to DTP: %v\n", err.Error())
 		return code425
 	}
 	defer conn.Close()
 
 	n, err := conn.Write(data)
 	if n != len(data) {
-		fmt.Printf("DTP write too short\n")
+		s.logger.Printf("DTP write too short\n")
 		return code426
 	}
 	if err != nil {
-		fmt.Printf("error during DTP write: %v\n", err.Error())
+		s.logger.Printf("error during DTP write: %v\n", err.Error())
 		return code426
 	}
 
@@ -162,20 +181,20 @@ func (s *Session) realpath(path string) (string, error) {
 
 func (s *Session) getFileList(path string) (files []os.FileInfo, err error) {
 	if path, err = s.realpath(path); err != nil {
-		fmt.Printf("failed: %v\n", err.Error())
+		s.logger.Printf("failed: %v\n", err.Error())
 		return
 	}
 
 	fileInfo, err := os.Stat(path)
 	if err != nil {
-		fmt.Printf("stat(%v) failed: %v\n", path, err.Error())
+		s.logger.Printf("stat(%v) failed: %v\n", path, err.Error())
 		return
 	}
 
 	if fileInfo.IsDir() {
 		files, err = ioutil.ReadDir(path)
 		if err != nil {
-			fmt.Printf("ReadDir(%v) failed: %v\n", path, err.Error())
+			s.logger.Printf("ReadDir(%v) failed: %v\n", path, err.Error())
 			return
 		}
 	} else {
@@ -188,13 +207,13 @@ func (s *Session) getFileList(path string) (files []os.FileInfo, err error) {
 func (s *Session) deletePath(path string, allowDir bool, allowFile bool) error {
 	path, err := s.realpath(path)
 	if err != nil {
-		fmt.Printf("failed: %v\n", err.Error())
+		s.logger.Printf("failed: %v\n", err.Error())
 		return err
 	}
 
 	info, err := os.Stat(path)
 	if err != nil {
-		fmt.Printf("Stat(%v) failed: %v\n", path, err.Error())
+		s.logger.Printf("Stat(%v) failed: %v\n", path, err.Error())
 		return err
 	}
 
@@ -204,7 +223,7 @@ func (s *Session) deletePath(path string, allowDir bool, allowFile bool) error {
 
 	err = os.Remove(path)
 	if err != nil {
-		fmt.Printf("Remove(%v) failed: %v\n", path, err.Error())
+		s.logger.Printf("Remove(%v) failed: %v\n", path, err.Error())
 		return err
 	}
 
@@ -217,6 +236,12 @@ func (s *Session) handleFtpCommand(line string) string {
 	arguments := ""
 	if len(sliced) >= 2 {
 		arguments = sliced[1]
+	}
+
+	if command == "PASS" {
+		s.logger.Printf("-> PASS ****\n")
+	} else {
+		s.logger.Printf("-> %v\n", line)
 	}
 
 	switch command {
@@ -274,7 +299,6 @@ func (s *Session) handleFtpCommand(line string) string {
 }
 
 func (s *Session) handleUser(user string) string {
-	fmt.Printf("user '%v'\n", user)
 	s.loggedIn = false
 
 	if !s.config.AllowAnyUser() && user != s.config.Login {
@@ -293,7 +317,7 @@ func (s *Session) handlePassword(pass string) string {
 	s.loggedIn = false
 
 	if !s.config.VerifyPassword(pass) {
-		fmt.Printf("bad password\n")
+		s.logger.Printf("bad password\n")
 		return code530
 	}
 
@@ -377,7 +401,7 @@ func (s *Session) handlePort(addr string) string {
 	n, err := fmt.Sscanf(addr, "%d,%d,%d,%d,%d,%d", &h1, &h2, &h3, &h4, &p1, &p2)
 
 	if err != nil || n != 6 {
-		fmt.Printf("bad client DTP addr\n")
+		s.logger.Printf("bad client DTP addr\n")
 		return code501
 	}
 
@@ -394,14 +418,14 @@ func (s *Session) handlePassive() string {
 	}
 
 	if err := s.createListener(false); err != nil {
-		fmt.Printf("failed to open data port: " + err.Error())
+		s.logger.Printf("failed to open data port: " + err.Error())
 		s.quitting = true
 		return code421
 	}
 
 	tcpAddr, ok := s.dtpListener.Addr().(*net.TCPAddr)
 	if !ok {
-		fmt.Printf("unexpected listener address: %v", s.dtpListener.Addr())
+		s.logger.Printf("unexpected listener address: %v", s.dtpListener.Addr())
 		s.quitting = true
 		return code421
 	}
@@ -429,12 +453,12 @@ func (s *Session) handleCwd(pathname string) string {
 
 	pathname, err := s.realpath(pathname)
 	if err != nil {
-		fmt.Printf("failed: %v\n", err.Error())
+		s.logger.Printf("failed: %v\n", err.Error())
 		return code550
 	}
 
 	if info, err := os.Stat(pathname); err != nil || !info.IsDir() {
-		fmt.Printf("path %v is not a directory\n", pathname)
+		s.logger.Printf("path %v is not a directory\n", pathname)
 		return code550
 	}
 
@@ -463,13 +487,13 @@ func (s *Session) handleList(path string) string {
 
 	files, err := s.getFileList(path)
 	if err != nil {
-		fmt.Printf("failed: %v\n", err.Error())
+		s.logger.Printf("failed: %v\n", err.Error())
 		return code450
 	}
 
 	resp := ""
 	for _, file := range files {
-		user := "unknown" // TODO: implement this
+		user := "unknown"
 		group := "unknown"
 
 		line := fmt.Sprintf(
@@ -513,19 +537,19 @@ func (s *Session) handleRetrieve(path string) string {
 
 	path, err := s.realpath(path)
 	if err != nil {
-		fmt.Printf("failed: %v\n", err.Error())
+		s.logger.Printf("failed: %v\n", err.Error())
 		return code450
 	}
 
 	file, err := os.Open(path)
 	if err != nil {
-		fmt.Printf("Open(%v) failed: %v\n", path, err.Error())
+		s.logger.Printf("Open(%v) failed: %v\n", path, err.Error())
 		return code450
 	}
 
 	conn, err := s.dialDtp()
 	if err != nil {
-		fmt.Printf("cannot connect to DTP: %v\n", err.Error())
+		s.logger.Printf("cannot connect to DTP: %v\n", err.Error())
 		return code425
 	}
 	defer conn.Close()
@@ -536,17 +560,17 @@ func (s *Session) handleRetrieve(path string) string {
 		if err == io.EOF {
 			return code226
 		} else if err != nil {
-			fmt.Printf("read error: %v\n", err.Error())
+			s.logger.Printf("read error: %v\n", err.Error())
 			return code426
 		}
 
 		written, werr := conn.Write(buf[:n])
 		if werr != nil {
-			fmt.Printf("write error: %v\n", werr.Error())
+			s.logger.Printf("write error: %v\n", werr.Error())
 			return code426
 		}
 		if n != written {
-			fmt.Printf("write too short\n")
+			s.logger.Printf("write too short\n")
 			return code426
 		}
 	}
@@ -559,7 +583,7 @@ func (s *Session) handleStore(path string, truncate bool) string {
 
 	path, err := s.realpath(path)
 	if err != nil {
-		fmt.Printf("failed: %v\n", err.Error())
+		s.logger.Printf("failed: %v\n", err.Error())
 		return code553
 	}
 
@@ -571,7 +595,7 @@ func (s *Session) handleStore(path string, truncate bool) string {
 	}
 	file, err := os.OpenFile(path, flags, 0666)
 	if err != nil {
-		fmt.Printf("Create(%v) failed: %v\n", path, err.Error())
+		s.logger.Printf("Create(%v) failed: %v\n", path, err.Error())
 		return code553
 	}
 
@@ -579,7 +603,7 @@ func (s *Session) handleStore(path string, truncate bool) string {
 
 	conn, err := s.dialDtp()
 	if err != nil {
-		fmt.Printf("cannot connect to DTP: %v\n", err.Error())
+		s.logger.Printf("cannot connect to DTP: %v\n", err.Error())
 		return code425
 	}
 	defer conn.Close()
@@ -590,17 +614,17 @@ func (s *Session) handleStore(path string, truncate bool) string {
 		if err == io.EOF {
 			return code226
 		} else if err != nil {
-			fmt.Printf("read error: %v\n", err.Error())
+			s.logger.Printf("read error: %v\n", err.Error())
 			return code426
 		}
 
 		written, werr := file.Write(buf[:n])
 		if werr != nil {
-			fmt.Printf("write error: %v\n", werr.Error())
+			s.logger.Printf("write error: %v\n", werr.Error())
 			return code426
 		}
 		if n != written {
-			fmt.Printf("write too short\n")
+			s.logger.Printf("write too short\n")
 			return code426
 		}
 	}
@@ -614,13 +638,13 @@ func (s *Session) handleMkd(path string) string {
 
 	path, err := s.realpath(path)
 	if err != nil {
-		fmt.Printf("failed: %v\n", err.Error())
+		s.logger.Printf("failed: %v\n", err.Error())
 		return code550
 	}
 
 	err = os.Mkdir(path, os.ModePerm)
 	if err != nil {
-		fmt.Printf("Mkdir(%v) failed: %v\n", path, err.Error())
+		s.logger.Printf("Mkdir(%v) failed: %v\n", path, err.Error())
 		return code550
 	}
 	return fmt.Sprintf(code257created, path)
@@ -657,13 +681,13 @@ func (s *Session) handleRenameFrom(path string) string {
 
 	path, err := s.realpath(path)
 	if err != nil {
-		fmt.Printf("failed: %v\n", err.Error())
+		s.logger.Printf("failed: %v\n", err.Error())
 		return code550
 	}
 
 	_, err = os.Stat(path)
 	if err != nil {
-		fmt.Printf("Stat(%v) failed: %v\n", path, err.Error())
+		s.logger.Printf("Stat(%v) failed: %v\n", path, err.Error())
 		return code550
 	}
 
@@ -678,13 +702,13 @@ func (s *Session) handleRenameTo(path string) string {
 
 	path, err := s.realpath(path)
 	if err != nil {
-		fmt.Printf("failed: %v\n", err.Error())
+		s.logger.Printf("failed: %v\n", err.Error())
 		return code553
 	}
 
 	err = os.Rename(s.renameFrom, path)
 	if err != nil {
-		fmt.Printf("Rename(%v, %v) failed: %v\n",
+		s.logger.Printf("Rename(%v, %v) failed: %v\n",
 			s.renameFrom, path, err.Error())
 		return code553
 	}

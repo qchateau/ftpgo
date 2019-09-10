@@ -3,6 +3,7 @@ package main
 import (
 	"flag"
 	"fmt"
+	"log"
 	"net"
 	"os"
 
@@ -70,6 +71,10 @@ func genpass() {
 }
 
 func serve() {
+	logger := log.New(
+		os.Stderr,
+		"server                | ",
+		log.LstdFlags|log.Lshortfile)
 	if flag.NArg() != 2 {
 		usage()
 		os.Exit(1)
@@ -86,12 +91,12 @@ func serve() {
 		panic("failed to open: " + err.Error())
 	}
 
-	fmt.Printf("listening %s\n", ln.Addr().String())
+	logger.Printf("listening %s\n", ln.Addr().String())
 	defer ln.Close()
 	for {
 		conn, err := ln.Accept()
 		if err != nil {
-			fmt.Println("accept failed: " + err.Error())
+			logger.Println("accept failed: " + err.Error())
 		}
 
 		go RunSession(config, conn)
