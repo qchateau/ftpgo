@@ -9,8 +9,11 @@ import (
 	"log"
 	"net"
 	"os"
+	"os/user"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"syscall"
 )
 
 const noResponse = ""
@@ -493,14 +496,23 @@ func (s *Session) handleList(path string) string {
 
 	resp := ""
 	for _, file := range files {
-		user := "unknown"
-		group := "unknown"
+		userName := "unknown"
+		groupName := "unknown"
+
+		if sys, ok := file.Sys().(*syscall.Stat_t); ok {
+			if user, err := user.LookupId(strconv.FormatUint(uint64(sys.Uid), 10)); err == nil {
+				userName = user.Username
+			}
+			if grp, err := user.LookupGroupId(strconv.FormatUint(uint64(sys.Gid), 10)); err == nil {
+				groupName = grp.Name
+			}
+		}
 
 		line := fmt.Sprintf(
 			"%v 1 %v %v %v %v %v\r\n",
 			file.Mode().String(),
-			user,
-			group,
+			userName,
+			groupName,
 			file.Size(),
 			file.ModTime().Format("Jan 01 2006"),
 			file.Name())
