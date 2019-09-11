@@ -1,12 +1,12 @@
 package main
 
 import (
-	"encoding/json"
 	"errors"
 	"io/ioutil"
 	"path/filepath"
 
 	"golang.org/x/crypto/bcrypt"
+	"gopkg.in/yaml.v2"
 )
 
 // EncryptPassword encrypts a clear password into a salted hash
@@ -19,7 +19,7 @@ func LoadConfig(path string) (Config, error) {
 	var c Config
 	if content, err := ioutil.ReadFile(path); err != nil {
 		return c, err
-	} else if err := json.Unmarshal(content, &c); err != nil {
+	} else if err := yaml.Unmarshal(content, &c); err != nil {
 		return c, err
 	}
 	if !filepath.IsAbs(c.Jail) {
@@ -49,14 +49,4 @@ func (c *Config) PasswordRequired() bool {
 func (c *Config) VerifyPassword(pass string) bool {
 	return bcrypt.CompareHashAndPassword(
 		[]byte(c.Password), []byte(pass)) == nil
-}
-
-// Dump writes configuration to a file
-func (c *Config) Dump(path string) (err error) {
-	content, err := json.MarshalIndent(c, "", "  ")
-	if err != nil {
-		return
-	}
-	err = ioutil.WriteFile(path, content, 0644)
-	return
 }

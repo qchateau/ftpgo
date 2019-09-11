@@ -1,0 +1,15 @@
+
+# Bind address and port
+addr: 127.0.0.1
+port: 10021
+
+# Server login, let empty to allow any login
+login:
+
+# Hashed password. An empty password is allowed,
+# in which case the server won't ask for a password on login
+# Use "ftpgo genpass" to generate a new password hash
+password: $2a$10$IdcambWwhrXEcdwIglYPNunKp4s9pcU4M3IPX0mwdO5Vw0ftDVXxq
+
+# Jail directory, must be an absolute path
+jail: /
