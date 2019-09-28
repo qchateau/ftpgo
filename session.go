@@ -423,16 +423,11 @@ func (s *Session) handlePassive() string {
 		return code421
 	}
 
-	tcpAddr, ok := s.dtpListener.Addr().(*net.TCPAddr)
-	if !ok {
-		s.logger.Printf("unexpected listener address: %v", s.dtpListener.Addr())
-		s.quitting = true
-		return code421
-	}
-
-	ip := tcpAddr.IP.To4()
+	localTCPAddr := s.piConn.LocalAddr().(*net.TCPAddr)
+	listenerTCPAddr := s.dtpListener.Addr().(*net.TCPAddr)
+	ip := localTCPAddr.IP.To4()
 	h1, h2, h3, h4 := ip[0], ip[1], ip[2], ip[3]
-	p1, p2 := (tcpAddr.Port >> 8 & 0xff), tcpAddr.Port&0xff
+	p1, p2 := (listenerTCPAddr.Port >> 8 & 0xff), listenerTCPAddr.Port&0xff
 	s.passive = true
 
 	return fmt.Sprintf(code227, h1, h2, h3, h4, p1, p2)
